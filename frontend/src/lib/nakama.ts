@@ -1,4 +1,4 @@
-import { Client, Session } from '@heroiclabs/nakama-js';
+import { Client, Session, type Socket } from '@heroiclabs/nakama-js';
 
 // Initialize Nakama client
 const client = new Client('defaultkey', 'localhost', '7350');
@@ -70,9 +70,9 @@ export async function findOrCreateMatch(
  * Join a match via WebSocket
  */
 export async function joinMatch(
-  socket: NakamaSocket,
+  socket: Socket,
   matchId: string
-): Promise<{ matchId: string; presences: Array<Record<string, unknown>> }> {
+) {
   try {
     const result = await socket.joinMatch(matchId);
     console.log('Joined match:', matchId);
@@ -86,11 +86,11 @@ export async function joinMatch(
 /**
  * Send a move to the server
  */
-export async function sendMove(socket: NakamaSocket, matchId: string, position: number) {
+export async function sendMove(socket: Socket, matchId: string, position: number) {
   try {
     const opCode = 3; // MAKE_MOVE opcode
     const data = JSON.stringify({ position });
-    await socket.sendMatchData(matchId, opCode, data);
+    await socket.sendMatchState(matchId, opCode, data);
   } catch (error) {
     console.error('Failed to send move:', error);
     throw new Error('Failed to send move to server');
@@ -100,7 +100,7 @@ export async function sendMove(socket: NakamaSocket, matchId: string, position: 
 /**
  * Leave a match
  */
-export async function leaveMatch(socket: NakamaSocket, matchId: string) {
+export async function leaveMatch(socket: Socket, matchId: string) {
   try {
     await socket.leaveMatch(matchId);
     console.log('Left match:', matchId);

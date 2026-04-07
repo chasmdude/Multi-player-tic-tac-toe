@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameStore } from '@/store/gameStore';
-import type { Socket as NakamaSocket } from '@heroiclabs/nakama-js';
+import type { Socket } from '@heroiclabs/nakama-js';
 import {
   authenticateAnonymously,
   createSocket,
@@ -21,14 +21,9 @@ const OpCode = {
   MAKE_MOVE: 3,
 } as const;
 
-interface SocketMessage {
-  op_code: number;
-  data: string;
-}
-
 function App() {
   const store = useGameStore();
-  const socketRef = useRef<NakamaSocket | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
   const [error, setError] = useState<string | null>(null);
@@ -86,15 +81,17 @@ function App() {
   /**
    * Setup WebSocket event listeners
    */
-  const setupSocketListeners = (socket: NakamaSocket) => {
+  const setupSocketListeners = (socket: Socket) => {
     // Handle incoming match messages
-    socket.onmatchdata = (message: SocketMessage) => {
+    socket.onmatchdata = (data) => {
       try {
-        console.log('Received message:', message);
-
-        if (message.op_code === OpCode.UPDATE_STATE) {
-          // Parse server state update
-          const state = JSON.parse(message.data);
+        console.log('Received message:', data);
+        
+        // data is MatchData with op_code and data properties
+        if (data.op_code === OpCode.UPDATE_STATE) {
+          // Parse server state update (data.data is Uint8Array, convert to string)
+          const dataStr = typeof data.data === 'string' ? data.data : new TextDecoder().decode(data.data);
+          const state = JSON.parse(dataStr);
           console.log('State update:', state);
 
           store.updateState({
@@ -118,9 +115,10 @@ function App() {
           if (opponentId) {
             store.updateState({ opponentName: `Player ${opponentId.substring(0, 8)}` });
           }
-        } else if (message.op_code === OpCode.GAME_OVER) {
+        } else if (data.op_code === OpCode.GAME_OVER) {
           // Parse game over message
-          const result = JSON.parse(message.data);
+          const dataStr = typeof data.data === 'string' ? data.data : new TextDecoder().decode(data.data);
+          const result = JSON.parse(dataStr);
           console.log('Game over:', result);
 
           // Determine win/loss/draw
@@ -150,24 +148,27 @@ function App() {
       }
     };
 
-    // Handle match presence changes
-    socket.onmatchpresence = (presence: Record<string, unknown>) => {
+    // Handle match presence changes (MatchPresenceEvent)
+    socket.onmatchpresence = (presence) => {
       console.log('Match presence:', presence);
-      if (presence.leaves && presence.leaves.length > 0) {
+      const joins = (presence.joins as unknown as Array<Record<string, unknown>>) || [];
+      const leaves = (presence.leaves as unknown as Array<Record<string, unknown>>) || [];
+      
+      if (leaves && leaves.length > 0) {
         console.log('Player disconnected');
         setError('Opponent disconnected. Waiting for reconnection...');
         store.setConnected(false);
       }
-      if (presence.joins && presence.joins.length > 0) {
+      if (joins && joins.length > 0) {
         console.log('Player joined');
         store.setConnected(true);
         setError(null);
       }
     };
 
-    // Handle socket close
-    socket.onclose = () => {
-      console.log('Socket closed');
+    // Handle socket disconnect
+    socket.ondisconnect = () => {
+      console.log('Socket disconnected');
       store.setConnected(false);
       setError('Connection lost. Reconnecting...');
 
@@ -179,8 +180,9 @@ function App() {
       }
     };
 
-    socket.onerror = (err: Error) => {
-      console.error('Socket error:', err);
+    // Handle socket errors
+    socket.onerror = (evt) => {
+      console.error('Socket error:', evt);
       store.setConnected(false);
       setError('Connection error. Reconnecting...');
     };
