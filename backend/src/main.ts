@@ -231,16 +231,36 @@ function broadcastGameOver(
 
 // ─── RPC: FindOrCreateMatch ────────────────────────────────────────────────────
 // Clients call this to get a match they can join (or start one)
-const rpcFindMatch: RpcFunction = (ctx, logger, nk, payload) => {
-  // Minimal RPC: tell clients to use matchmaker
-  // For simplicity, return a newly created match ID
-  // (Full matchmaker integration handled via AddMatchmakerAsync on client)
-  return JSON.stringify({ message: 'Use matchmaker to find a match.' });
+/**
+ * Find or create a match for the player
+ * If an open match exists, return its ID
+ * Otherwise, create a new match and return its ID
+ */
+const rpcFindOrCreateMatch: RpcFunction = (ctx, logger, nk, payload) => {
+  try {
+    // Try to find an open match with limit: 1
+    const matches = nk.matchList(1, true, null, { open: true }, null);
+    
+    if (matches && matches.length > 0) {
+      // Found an open match, return its ID
+      const matchId = matches[0].match_id;
+      logger.info(`TicTacToe RPC: Found open match: ${matchId}`);
+      return JSON.stringify({ match_id: matchId });
+    }
+
+    // No open match found, create a new one
+    const newMatchId = nk.matchCreate('tictactoe', {});
+    logger.info(`TicTacToe RPC: Created new match: ${newMatchId}`);
+    return JSON.stringify({ match_id: newMatchId });
+  } catch (err) {
+    logger.error(`TicTacToe RPC Error: ${err}`);
+    return JSON.stringify({ error: 'Failed to find or create match' });
+  }
 };
 
 // ─── InitModule ───────────────────────────────────────────────────────────────
 
-function InitModule(
+export function InitModule(
   ctx: nkruntime.Context,
   logger: nkruntime.Logger,
   nk: nkruntime.Nakama,
@@ -261,7 +281,7 @@ function InitModule(
     matchTerminate,
   });
 
-  initializer.registerRpc('find_match', rpcFindMatch);
+  initializer.registerRpc('find_or_create_match', rpcFindOrCreateMatch);
 
   logger.info('TicTacToe: Module initialized successfully.');
 }
