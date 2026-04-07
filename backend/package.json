@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Nakama server-authoritative Tic-Tac-Toe game backend",
   "scripts": {
-    "build": "npx esbuild src/main.ts --bundle --platform=node --target=es2015 --outfile=build/main.js --global-name=InitModule && echo 'Build complete: build/main.js'",
-    "watch": "npx esbuild src/main.ts --bundle --platform=node --target=es5 --outfile=build/main.js --watch"
+    "build": "npx tsc && node -e \"const fs=require('fs');let code=fs.readFileSync('build/main.js','utf8');code=code.replace(/[^ -~\\n\\t]/g,'');fs.writeFileSync('build/main.js',code);\" && ls -lh build/main.js && echo 'Build complete: build/main.js'",
+    "watch": "npx tsc --watch"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

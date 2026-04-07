@@ -260,7 +260,7 @@ const rpcFindOrCreateMatch: RpcFunction = (ctx, logger, nk, payload) => {
 
 // ─── InitModule ───────────────────────────────────────────────────────────────
 
-export function InitModule(
+function InitModule(
   ctx: nkruntime.Context,
   logger: nkruntime.Logger,
   nk: nkruntime.Nakama,
@@ -268,8 +268,8 @@ export function InitModule(
 ): void {
   logger.info('TicTacToe: Initializing module…');
 
-  // Create the leaderboard (wins)
-  nk.leaderboardCreate('tictactoe_wins', false, nkruntime.SortOrder.Descending, nkruntime.Operator.Incr, null, null);
+  // Create the leaderboard (wins) - disabled for now
+  // nk.leaderboardCreate('tictactoe_wins', false, 1, 1, null, null);
 
   initializer.registerMatch<TicTacToeState>('tictactoe', {
     matchInit,
@@ -284,4 +284,9 @@ export function InitModule(
   initializer.registerRpc('find_or_create_match', rpcFindOrCreateMatch);
 
   logger.info('TicTacToe: Module initialized successfully.');
+}
+
+// Make InitModule available at global scope for Nakama runtime
+if (typeof globalThis !== 'undefined') {
+  (globalThis as any).InitModule = InitModule;
 }
