@@ -1,8 +1,7 @@
 import { Client, Session } from '@heroiclabs/nakama-js';
 
 // Initialize Nakama client
-const client = new Client('defaultkey', 'localhost', 7350);
-client.ssl = false;
+const client = new Client('defaultkey', 'localhost', '7350');
 
 export interface NakamaConfig {
   host: string;
@@ -32,7 +31,7 @@ export async function authenticateAnonymously(): Promise<Session> {
 export async function createSocket(session: Session) {
   try {
     const socket = client.createSocket();
-    await socket.connect(session);
+    await socket.connect(session, true);
     console.log('WebSocket connected');
     return socket;
   } catch (error) {
@@ -44,13 +43,18 @@ export async function createSocket(session: Session) {
 /**
  * Find or create a match via RPC
  */
+interface RpcResponse {
+  payload: Record<string, unknown>;
+}
+
 export async function findOrCreateMatch(
   session: Session,
   rpcId: string = 'find_or_create_match'
 ): Promise<string> {
   try {
-    const response = await client.rpc(session, rpcId, {});
-    const matchId = response.payload?.match_id || response.payload?.matchId;
+    const response = await client.rpc(session, rpcId, {}) as RpcResponse;
+    const payload = response.payload;
+    const matchId = (payload?.match_id || payload?.matchId) as string | undefined;
     if (!matchId) {
       throw new Error('No match ID in RPC response');
     }
@@ -66,9 +70,9 @@ export async function findOrCreateMatch(
  * Join a match via WebSocket
  */
 export async function joinMatch(
-  socket: any,
+  socket: NakamaSocket,
   matchId: string
-): Promise<{ matchId: string; presences: any[] }> {
+): Promise<{ matchId: string; presences: Array<Record<string, unknown>> }> {
   try {
     const result = await socket.joinMatch(matchId);
     console.log('Joined match:', matchId);
@@ -82,7 +86,7 @@ export async function joinMatch(
 /**
  * Send a move to the server
  */
-export async function sendMove(socket: any, matchId: string, position: number) {
+export async function sendMove(socket: NakamaSocket, matchId: string, position: number) {
   try {
     const opCode = 3; // MAKE_MOVE opcode
     const data = JSON.stringify({ position });
@@ -96,7 +100,7 @@ export async function sendMove(socket: any, matchId: string, position: number) {
 /**
  * Leave a match
  */
-export async function leaveMatch(socket: any, matchId: string) {
+export async function leaveMatch(socket: NakamaSocket, matchId: string) {
   try {
     await socket.leaveMatch(matchId);
     console.log('Left match:', matchId);

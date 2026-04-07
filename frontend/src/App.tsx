@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameStore } from '@/store/gameStore';
+import type { Socket as NakamaSocket } from '@heroiclabs/nakama-js';
 import {
   authenticateAnonymously,
   createSocket,
@@ -18,11 +19,16 @@ const OpCode = {
   UPDATE_STATE: 1,
   GAME_OVER: 2,
   MAKE_MOVE: 3,
-};
+} as const;
+
+interface SocketMessage {
+  op_code: number;
+  data: string;
+}
 
 function App() {
   const store = useGameStore();
-  const socketRef = useRef<any>(null);
+  const socketRef = useRef<NakamaSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +45,9 @@ function App() {
 
       // Authenticate anonymously
       const session = await authenticateAnonymously();
+      if (!session.user_id) {
+        throw new Error('Failed to get user ID from session');
+      }
       store.setCurrentUserId(session.user_id);
 
       // Create WebSocket socket
@@ -77,9 +86,9 @@ function App() {
   /**
    * Setup WebSocket event listeners
    */
-  const setupSocketListeners = (socket: any) => {
+  const setupSocketListeners = (socket: NakamaSocket) => {
     // Handle incoming match messages
-    socket.onmatchdata = (message: any) => {
+    socket.onmatchdata = (message: SocketMessage) => {
       try {
         console.log('Received message:', message);
 
@@ -96,7 +105,7 @@ function App() {
           });
 
           // Assign player mark if not set
-          if (!store.playerMark && state.players[store.currentUserId]) {
+          if (!store.playerMark && store.currentUserId && state.players[store.currentUserId]) {
             store.updateState({
               playerMark: state.players[store.currentUserId],
             });
@@ -115,7 +124,7 @@ function App() {
           console.log('Game over:', result);
 
           // Determine win/loss/draw
-          let winner = result.winner;
+          const winner = result.winner;
           if (winner === 'DRAW') {
             store.updateState({
               gameOver: true,
@@ -142,7 +151,7 @@ function App() {
     };
 
     // Handle match presence changes
-    socket.onmatchpresence = (presence: any) => {
+    socket.onmatchpresence = (presence: Record<string, unknown>) => {
       console.log('Match presence:', presence);
       if (presence.leaves && presence.leaves.length > 0) {
         console.log('Player disconnected');
@@ -170,7 +179,7 @@ function App() {
       }
     };
 
-    socket.onerror = (err: any) => {
+    socket.onerror = (err: Error) => {
       console.error('Socket error:', err);
       store.setConnected(false);
       setError('Connection error. Reconnecting...');
@@ -180,7 +189,7 @@ function App() {
   /**
    * Handle board click - send move to server
    */
-  const handleBoardUpdate = async () => {
+  const handleBoardUpdate = useCallback(async () => {
     // Check if board has changed (move was made locally)
     const currentBoard = store.board;
     const changed = currentBoard.some((cell, i) => lastBoardRef.current[i] !== cell);
@@ -199,25 +208,24 @@ function App() {
         }
       }
     }
-  };
+  }, [store]);
 
   // Initialize on mount
   useEffect(() => {
-    if (!isInitializing && !store.matchId && !error) {
-      initializeGame();
-    }
+    initializeGame();
 
     return () => {
       if (socketRef.current) {
         leaveMatch(socketRef.current, store.matchId || '').catch(console.error);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Handle board updates
   useEffect(() => {
-    handleBoardUpdate();
-  }, [store.board]);
+    void handleBoardUpdate();
+  }, [handleBoardUpdate, store.board]);
 
   // Render loading state
   if (isInitializing && !store.matchId) {

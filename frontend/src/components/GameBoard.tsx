@@ -1,7 +1,7 @@
 import { useGameStore } from '@/store/gameStore';
 
 export default function GameBoard() {
-  const { board, playerMark, isYourTurn, currentTurn, currentUserId } = useGameStore();
+  const { board, isYourTurn } = useGameStore();
   const store = useGameStore();
 
   const handleCellClick = (index: number) => {

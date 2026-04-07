@@ -2,8 +2,7 @@ import { useGameStore } from '@/store/gameStore';
 import { Circle } from 'lucide-react';
 
 export default function GameStatus() {
-  const { playerMark, currentTurn, opponentName, timeoutSeconds, isConnected, currentUserId } =
-    useGameStore();
+  const { playerMark, opponentName, timeoutSeconds, isConnected } = useGameStore();
   const { isYourTurn } = useGameStore();
 
   const getMarkColor = (mark: string | null) => {

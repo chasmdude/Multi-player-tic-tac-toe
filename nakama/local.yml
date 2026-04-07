@@ -5,9 +5,6 @@ logger:
   level: "DEBUG"
   stdout: true
 
-database:
-  address: "postgres:localdb@postgres:5432/nakama"
-
 session:
   encryption_key: "default-encryption-key"
   token_expiry_sec: 7200
@@ -21,3 +18,6 @@ console:
   port: 7351
   username: "admin"
   password: "password"
+
+runtime:
+  js_entrypoint: "main.js"

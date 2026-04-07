@@ -2,11 +2,7 @@ import { useGameStore } from '@/store/gameStore';
 import { RotateCcw } from 'lucide-react';
 
 export default function GameResult() {
-  const { gameOver, winner, playerMark, resetGame } = useGameStore();
-
-  if (!gameOver) {
-    return null;
-  }
+  const { gameOver, winner, resetGame, board } = useGameStore();
 
   const getResultMessage = () => {
     if (winner === 'DRAW') {
@@ -32,6 +28,10 @@ export default function GameResult() {
     return 'text-gray-600';
   };
 
+  if (!gameOver) {
+    return null;
+  }
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center rounded-lg">
       <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md text-center">
@@ -40,7 +40,7 @@ export default function GameResult() {
         <div className="mb-6">
           <p className="text-gray-600 mb-2">Final Board:</p>
           <div className="grid grid-cols-3 gap-1 mb-4 p-2 bg-gray-50 rounded">
-            {useGameStore().board.map((mark, i) => (
+            {board.map((mark, i) => (
               <div
                 key={i}
                 className="w-12 h-12 border border-gray-300 rounded flex items-center justify-center font-bold text-lg bg-white"
