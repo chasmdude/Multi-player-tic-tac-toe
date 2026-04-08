@@ -1,42 +1,69 @@
 import { useGameStore } from '@/store/gameStore';
-import { Circle } from 'lucide-react';
+import { Circle, Clock, User } from 'lucide-react';
 
 export default function GameStatus() {
-  const { playerMark, opponentName, timeoutSeconds, isConnected } = useGameStore();
-  const { isYourTurn } = useGameStore();
+  const { playerMark, opponentName, timeoutSeconds, isConnected, isYourTurn } = useGameStore();
 
   const getMarkColor = (mark: string | null) => {
-    if (mark === 'X') return 'text-blue-600';
-    if (mark === 'O') return 'text-red-600';
-    return 'text-gray-600';
+    if (mark === 'X') return { bg: '#dbeafe', text: '#1d4ed8', border: '#3b82f6' };
+    if (mark === 'O') return { bg: '#fee2e2', text: '#dc2626', border: '#ef4444' };
+    return { bg: '#f3f4f6', text: '#6b7280', border: '#d1d5db' };
   };
 
-  const getTurnDisplay = () => {
-    if (isYourTurn()) {
-      return `Your Turn (X = blue, O = red)`;
-    }
-    return `${opponentName}'s Turn - ${timeoutSeconds()}s`;
-  };
+  const markStyle = getMarkColor(playerMark);
 
   return (
-    <div className="flex flex-col gap-3 p-4 bg-white rounded-lg shadow-md border border-gray-200">
-      <div className="flex items-center gap-2">
-        <Circle
-          size={12}
-          className={isConnected ? 'fill-green-500 text-green-500' : 'fill-red-500 text-red-500'}
-        />
-        <span className="text-sm text-gray-600">{isConnected ? 'Connected' : 'Disconnected'}</span>
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '16px',
+      padding: '16px',
+      background: 'white',
+      borderRadius: '12px',
+      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+    }}>
+      {/* Connection Status */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Circle size={12} fill={isConnected ? '#22c55e' : '#ef4444'} color={isConnected ? '#22c55e' : '#ef4444'} />
+          <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>{isConnected ? 'Connected' : 'Disconnected'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.875rem', color: '#6b7280' }}>
+          <Clock size={14} />
+          <span>{timeoutSeconds()}s</span>
+        </div>
       </div>
 
-      <div className="flex gap-4">
-        <div>
-          <p className="text-sm text-gray-600">Your Mark</p>
-          <p className={`text-2xl font-bold ${getMarkColor(playerMark)}`}>{playerMark || '-'}</p>
+      {/* Player Info */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+        <div style={{ 
+          padding: '16px', 
+          backgroundColor: markStyle.bg, 
+          borderRadius: '12px', 
+          border: `2px solid ${markStyle.border}`,
+          textAlign: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginBottom: '4px' }}>
+            <User size={16} />
+            <p style={{ fontSize: '0.875rem', color: markStyle.text }}>Your Mark</p>
+          </div>
+          <p style={{ fontSize: '2.5rem', fontWeight: 'bold', color: markStyle.text }}>{playerMark || '-'}</p>
         </div>
 
-        <div className="flex-1">
-          <p className="text-sm text-gray-600">Current Turn</p>
-          <p className="text-lg font-semibold text-gray-900">{getTurnDisplay()}</p>
+        <div style={{ 
+          padding: '16px', 
+          backgroundColor: '#f3f4f6', 
+          borderRadius: '12px', 
+          border: '2px solid #e5e7eb',
+          textAlign: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginBottom: '4px' }}>
+            <User size={16} />
+            <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>Current Turn</p>
+          </div>
+          <p style={{ fontSize: '1.125rem', fontWeight: 600, color: isYourTurn() ? '#16a34a' : '#d97706' }}>
+            {isYourTurn() ? '🎯 Your Turn!' : `${opponentName}'s Turn`}
+          </p>
         </div>
       </div>
     </div>

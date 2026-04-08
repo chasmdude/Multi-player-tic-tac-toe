@@ -17,14 +17,22 @@ export interface GameState {
   isConnected: boolean;
   opponentName: string;
   currentUserId: string | null;
+  currentUserName: string | null;
+  playerNames: { [userId: string]: string };
+  
+  // Pending move to send to server (not applied to local board)
+  pendingMove: number | null;
 
   // Actions
   makeMove: (position: number) => void;
+  queueMoveToSend: (position: number) => void;
+  clearPendingMove: () => void;
   updateState: (updates: Partial<GameState>) => void;
   resetGame: () => void;
   setMatchId: (id: string | null) => void;
   setConnected: (connected: boolean) => void;
-  setCurrentUserId: (id: string) => void;
+  setCurrentUserId: (id: string, name: string) => void;
+  setPlayerNames: (names: { [userId: string]: string }) => void;
 
   // Selectors
   isYourTurn: () => boolean;
@@ -40,10 +48,13 @@ const initialState = {
   matchId: null,
   gameOver: false,
   winner: null,
-  ticksRemaining: 150, // 30 seconds at 5 ticks/sec
+  ticksRemaining: 75, // 15 seconds at 5 ticks/sec
   isConnected: false,
   opponentName: 'Opponent',
   currentUserId: null,
+  currentUserName: null,
+  playerNames: {},
+  pendingMove: null,
 };
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -59,6 +70,14 @@ export const useGameStore = create<GameState>((set, get) => ({
     });
   },
 
+  queueMoveToSend: (position: number) => {
+    set({ pendingMove: position });
+  },
+
+  clearPendingMove: () => {
+    set({ pendingMove: null });
+  },
+
   updateState: (updates: Partial<GameState>) => {
     set((state) => ({
       ...state,
@@ -69,11 +88,14 @@ export const useGameStore = create<GameState>((set, get) => ({
   resetGame: () => {
     set({
       board: Array(9).fill(''),
+      playerMark: null,
       currentTurn: '',
+      players: {},
       gameOver: false,
       winner: null,
-      ticksRemaining: 150,
+      ticksRemaining: 75,
       matchId: null,
+      pendingMove: null,
     });
   },
 
@@ -85,8 +107,18 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ isConnected: connected });
   },
 
-  setCurrentUserId: (id: string) => {
-    set({ currentUserId: id });
+  setCurrentUserId: (id: string, name: string) => {
+    set((state) => ({
+      currentUserId: id,
+      currentUserName: name,
+      playerNames: { ...state.playerNames, [id]: name }
+    }));
+  },
+
+  setPlayerNames: (newNames: { [userId: string]: string }) => {
+    set((state) => ({
+      playerNames: { ...state.playerNames, ...newNames }
+    }));
   },
 
   isYourTurn: () => {

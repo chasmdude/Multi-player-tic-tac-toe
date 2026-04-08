@@ -10,4 +10,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    proxy: {
+      '/v2': {
+        target: 'http://localhost:7350',
+        changeOrigin: true,
+        ws: true,
+      },
+      '/ws': {
+        target: 'ws://localhost:7350',
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
 })

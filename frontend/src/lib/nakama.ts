@@ -1,7 +1,13 @@
 import { Client, Session, type Socket } from '@heroiclabs/nakama-js';
 
+// Nakama configuration using environment variables with sensible defaults
+const NAKAMA_SERVER_KEY = import.meta.env.VITE_NAKAMA_SERVER_KEY || 'default-server-key';
+const NAKAMA_HOST = import.meta.env.VITE_NAKAMA_HOST || 'localhost';
+const NAKAMA_PORT = import.meta.env.VITE_NAKAMA_PORT || '7350';
+const NAKAMA_USE_SSL = import.meta.env.VITE_NAKAMA_USE_SSL === 'true' || window.location.protocol === 'https:';
+
 // Initialize Nakama client
-const client = new Client('defaultkey', 'localhost', '7350');
+const client = new Client(NAKAMA_SERVER_KEY, NAKAMA_HOST, NAKAMA_PORT, NAKAMA_USE_SSL);
 
 export interface NakamaConfig {
   host: string;
@@ -12,11 +18,11 @@ export interface NakamaConfig {
 /**
  * Authenticate user anonymously with Nakama
  */
-export async function authenticateAnonymously(): Promise<Session> {
+export async function authenticateAnonymously(userId?: string): Promise<Session> {
   try {
-    const session = await client.authenticateCustom(
-      `anonymous_${Date.now()}_${Math.random()}`
-    );
+    // Use provided userId or generate a unique device ID
+    const deviceId = userId || `device_${Date.now()}_${Math.random().toString(36).substring(2, 15)}_${crypto.randomUUID()}`;
+    const session = await client.authenticateDevice(deviceId, true);
     console.log('Nakama authentication successful:', session.user_id);
     return session;
   } catch (error) {
@@ -75,7 +81,6 @@ export async function joinMatch(
 ) {
   try {
     const result = await socket.joinMatch(matchId);
-    console.log('Joined match:', matchId);
     return result;
   } catch (error) {
     console.error('Failed to join match:', error);
@@ -88,11 +93,19 @@ export async function joinMatch(
  */
 export async function sendMove(socket: Socket, matchId: string, position: number) {
   try {
-    const opCode = 3; // MAKE_MOVE opcode
+    if (!socket) {
+      throw new Error('Socket is not connected');
+    }
+    if (!matchId) {
+      throw new Error('Match ID is not set');
+    }
+    const opCode = 3;
     const data = JSON.stringify({ position });
+    console.log('sendMatchState called:', { matchId, opCode, data });
     await socket.sendMatchState(matchId, opCode, data);
+    console.log('sendMatchState completed');
   } catch (error) {
-    console.error('Failed to send move:', error);
+    console.error('sendMove failed:', error);
     throw new Error('Failed to send move to server');
   }
 }

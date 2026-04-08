@@ -28,7 +28,124 @@ function App() {
   const maxReconnectAttempts = 5;
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
-  const lastBoardRef = useRef<string[]>(Array(9).fill(''));
+  const isProcessingMoveRef = useRef(false);
+
+  /**
+   * Setup WebSocket event listeners
+   */
+  const setupSocketListeners = (socket: Socket) => {
+    socket.onmatchdata = (data) => {
+      try {
+        const dataStr = typeof data.data === 'string' ? data.data : new TextDecoder().decode(data.data);
+        const serverState = JSON.parse(dataStr);
+
+        if (data.op_code === OpCode.UPDATE_STATE) {
+          const currentState = useGameStore.getState();
+          const ticksRemaining = serverState.ticksSinceLastMove !== undefined ? Math.max(0, 75 - serverState.ticksSinceLastMove) : 75;
+          
+          const mergedBoard: string[] = [];
+          for (let i = 0; i < 9; i++) {
+            if (serverState.board?.[i] && serverState.board[i] !== '') {
+              mergedBoard[i] = serverState.board[i];
+            } else if (currentState.board?.[i] && currentState.board[i] !== '') {
+              // We have a local optimistic mark but server says empty.
+              // If server still thinks it's our turn, keep optimistic mark (pending server response).
+              // If server thinks it's the opponent's turn, our rejected moves should be cleared.
+              if (serverState.currentTurn === currentState.currentUserId) {
+                mergedBoard[i] = currentState.board[i];
+              } else {
+                mergedBoard[i] = '';
+              }
+            } else {
+              mergedBoard[i] = '';
+            }
+          }
+          
+          store.updateState({
+            board: mergedBoard,
+            currentTurn: serverState.currentTurn || '',
+            players: serverState.players || {},
+            ticksRemaining: ticksRemaining,
+            gameOver: serverState.gameOver || false,
+            winner: serverState.winner || null,
+          });
+
+          if (currentState.currentUserId && serverState.players) {
+            const myMark = serverState.players[currentState.currentUserId];
+            if (myMark) {
+              store.updateState({ playerMark: myMark as 'X' | 'O' });
+            }
+            
+              const opponentId = Object.keys(serverState.players || {}).find(id => id !== currentState.currentUserId);
+              if (opponentId) {
+                const oppName = currentState.playerNames[opponentId] || `Player ${opponentId.substring(0, 4)}...`;
+                store.updateState({ opponentName: oppName });
+              }
+            }
+          } else if (data.op_code === OpCode.GAME_OVER) {
+          const currentState = useGameStore.getState();
+          const winner = serverState.winner;
+          let winStatus: 'WIN' | 'LOSS' | 'DRAW' = 'DRAW';
+          
+          if (winner === 'DRAW') {
+            winStatus = 'DRAW';
+          } else if (winner === currentState.currentUserId) {
+            winStatus = 'WIN';
+          } else {
+            winStatus = 'LOSS';
+          }
+
+          store.updateState({ 
+            gameOver: true, 
+            winner: winStatus, 
+            board: serverState.board || currentState.board 
+          });
+        }
+      } catch (err) {
+        console.error('Error processing message:', err);
+      }
+    };
+
+    socket.onmatchpresence = (presence) => {
+      console.log('Match presence:', presence);
+      const joins = presence.joins || [];
+      const leaves = presence.leaves || [];
+      
+      if (joins.length > 0) {
+        const newNames: Record<string, string> = {};
+        joins.forEach(p => {
+            if (p.user_id && p.username) {
+                newNames[p.user_id] = p.username;
+            }
+        });
+        useGameStore.getState().setPlayerNames(newNames);
+        
+        store.setConnected(true);
+        setError(null);
+      }
+      
+      if (leaves.length > 0) {
+        setError('Opponent disconnected. Waiting for reconnection...');
+        store.setConnected(false);
+      }
+    };
+
+    socket.ondisconnect = () => {
+      store.setConnected(false);
+      setError('Connection lost. Reconnecting...');
+      if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+        reconnectAttemptsRef.current++;
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 8000);
+        setTimeout(initializeGame, delay);
+      }
+    };
+
+    socket.onerror = (evt) => {
+      console.error('Socket error:', evt);
+      store.setConnected(false);
+      setError('Connection error. Reconnecting...');
+    };
+  };
 
   /**
    * Initialize Nakama connection and find/join match
@@ -38,39 +155,64 @@ function App() {
       setIsInitializing(true);
       setError(null);
 
-      // Authenticate anonymously
-      const session = await authenticateAnonymously();
-      if (!session.user_id) {
-        throw new Error('Failed to get user ID from session');
-      }
-      store.setCurrentUserId(session.user_id);
+      // Try to restore user ID from localStorage, or create new anonymous user
+      let userId = localStorage.getItem('userId') || undefined;
+      const session = await authenticateAnonymously(userId);
+      userId = session.user_id!;
+      localStorage.setItem('userId', userId);
+      store.setCurrentUserId(userId, session.username || 'You');
 
-      // Create WebSocket socket
       const socket = await createSocket(session);
       socketRef.current = socket;
       setupSocketListeners(socket);
       store.setConnected(true);
 
-      // Find or create a match
-      const matchId = await findOrCreateMatch(session);
-      store.setMatchId(matchId);
+      // Find or create match with retry logic
+      let matchId = localStorage.getItem('activeMatchId');
+      let match;
+      let joinAttempts = 0;
+      const maxAttempts = 3;
+      
+      while (joinAttempts < maxAttempts) {
+        if (!matchId) {
+          matchId = await findOrCreateMatch(session);
+        }
+        
+        try {
+          match = await joinMatch(socket, matchId);
+          // Success!
+          localStorage.setItem('activeMatchId', matchId);
+          break;
+        } catch (joinErr) {
+          // Join failed - clear and get new match
+          console.log('Join failed (attempt ' + (joinAttempts + 1) + '), retrying...');
+          localStorage.removeItem('activeMatchId');
+          matchId = null;
+          joinAttempts++;
+        }
+      }
+      
+      if (!match) {
+        throw new Error('Could not join a match after ' + maxAttempts + ' attempts');
+      }
+      
+      const actualMatchId = match.match_id;
+      store.setMatchId(actualMatchId);
+      
+      // match.presences includes other players, plus self is in the session
+      // However, we wait for UPDATE_STATE for official player mapping
+      // We set an empty object just to indicate the match is active
+      store.updateState({ players: {} });
 
-      // Join the match
-      const joinResult = await joinMatch(socket, matchId);
-      console.log('Join result:', joinResult);
-
-      // The match will start and send UPDATE_STATE when both players join
       reconnectAttemptsRef.current = 0;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      console.error('Initialization failed:', errorMsg);
       setError(errorMsg);
-
-      // Retry with exponential backoff
+      // Clear invalid matchId from storage
+      localStorage.removeItem('activeMatchId');
       if (reconnectAttemptsRef.current < maxReconnectAttempts) {
         reconnectAttemptsRef.current++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 8000);
-        console.log(`Retrying in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
         setTimeout(initializeGame, delay);
       }
     } finally {
@@ -78,158 +220,76 @@ function App() {
     }
   };
 
-  /**
-   * Setup WebSocket event listeners
-   */
-  const setupSocketListeners = (socket: Socket) => {
-    // Handle incoming match messages
-    socket.onmatchdata = (data) => {
-      try {
-        console.log('Received message:', data);
-        
-        // data is MatchData with op_code and data properties
-        if (data.op_code === OpCode.UPDATE_STATE) {
-          // Parse server state update (data.data is Uint8Array, convert to string)
-          const dataStr = typeof data.data === 'string' ? data.data : new TextDecoder().decode(data.data);
-          const state = JSON.parse(dataStr);
-          console.log('State update:', state);
-
-          store.updateState({
-            board: state.board || [],
-            currentTurn: state.currentTurn || '',
-            players: state.players || {},
-            ticksRemaining: state.ticksSinceLastMove !== undefined ? 150 - state.ticksSinceLastMove : 150,
-          });
-
-          // Assign player mark if not set
-          if (!store.playerMark && store.currentUserId && state.players[store.currentUserId]) {
-            store.updateState({
-              playerMark: state.players[store.currentUserId],
-            });
-          }
-
-          // Determine and set opponent name
-          const opponentId = Object.keys(state.players).find(
-            (id) => id !== store.currentUserId
-          );
-          if (opponentId) {
-            store.updateState({ opponentName: `Player ${opponentId.substring(0, 8)}` });
-          }
-        } else if (data.op_code === OpCode.GAME_OVER) {
-          // Parse game over message
-          const dataStr = typeof data.data === 'string' ? data.data : new TextDecoder().decode(data.data);
-          const result = JSON.parse(dataStr);
-          console.log('Game over:', result);
-
-          // Determine win/loss/draw
-          const winner = result.winner;
-          if (winner === 'DRAW') {
-            store.updateState({
-              gameOver: true,
-              winner: 'DRAW',
-              board: result.board || store.board,
-            });
-          } else if (winner === store.currentUserId) {
-            store.updateState({
-              gameOver: true,
-              winner: 'WIN',
-              board: result.board || store.board,
-            });
-          } else {
-            store.updateState({
-              gameOver: true,
-              winner: 'LOSS',
-              board: result.board || store.board,
-            });
-          }
-        }
-      } catch (err) {
-        console.error('Error processing message:', err);
-      }
-    };
-
-    // Handle match presence changes (MatchPresenceEvent)
-    socket.onmatchpresence = (presence) => {
-      console.log('Match presence:', presence);
-      const joins = (presence.joins as unknown as Array<Record<string, unknown>>) || [];
-      const leaves = (presence.leaves as unknown as Array<Record<string, unknown>>) || [];
-      
-      if (leaves && leaves.length > 0) {
-        console.log('Player disconnected');
-        setError('Opponent disconnected. Waiting for reconnection...');
-        store.setConnected(false);
-      }
-      if (joins && joins.length > 0) {
-        console.log('Player joined');
-        store.setConnected(true);
-        setError(null);
-      }
-    };
-
-    // Handle socket disconnect
-    socket.ondisconnect = () => {
-      console.log('Socket disconnected');
-      store.setConnected(false);
-      setError('Connection lost. Reconnecting...');
-
-      // Attempt reconnection
-      if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-        reconnectAttemptsRef.current++;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 8000);
-        setTimeout(initializeGame, delay);
-      }
-    };
-
-    // Handle socket errors
-    socket.onerror = (evt) => {
-      console.error('Socket error:', evt);
-      store.setConnected(false);
-      setError('Connection error. Reconnecting...');
-    };
-  };
-
-  /**
-   * Handle board click - send move to server
-   */
   const handleBoardUpdate = useCallback(async () => {
-    // Check if board has changed (move was made locally)
-    const currentBoard = store.board;
-    const changed = currentBoard.some((cell, i) => lastBoardRef.current[i] !== cell);
+    const state = useGameStore.getState();
+    const pendingMove = state.pendingMove;
+    const matchId = state.matchId;
+    const playerMark = state.playerMark;
 
-    if (changed && store.isYourTurn() && socketRef.current && store.matchId) {
-      const position = currentBoard.findIndex((cell, i) => lastBoardRef.current[i] !== cell);
+    console.log('handleBoardUpdate called:', {
+      pendingMove,
+      matchId,
+      isYourTurn: state.isYourTurn(),
+      hasSocket: !!socketRef.current,
+      isProcessing: isProcessingMoveRef.current,
+      playerMark
+    });
 
-      if (position !== -1) {
-        try {
-          await sendMove(socketRef.current, store.matchId, position);
-          lastBoardRef.current = [...currentBoard];
-          console.log(`Sent move: position ${position}`);
-        } catch (err) {
-          console.error('Failed to send move:', err);
-          setError('Failed to send move. Please try again.');
+    if (pendingMove !== null && state.isYourTurn() && socketRef.current && matchId && !isProcessingMoveRef.current) {
+      try {
+        isProcessingMoveRef.current = true;
+        
+        // Optimistic update - show mark immediately and end turn locally
+        const newBoard = [...state.board];
+        if (playerMark && newBoard[pendingMove] === '') {
+          newBoard[pendingMove] = playerMark;
+          store.updateState({ board: newBoard, currentTurn: '' });
+          console.log('Optimistic update: board now', newBoard);
         }
+        
+        await sendMove(socketRef.current, matchId, pendingMove);
+        state.clearPendingMove();
+      } catch (err) {
+        console.error('Move send failed:', err);
+        setError('Failed to send move.');
+      } finally {
+        isProcessingMoveRef.current = false;
       }
+    } else if (pendingMove !== null) {
+      console.log('Move rejected:', { pendingMove, isYourTurn: state.isYourTurn(), hasSocket: !!socketRef.current, matchId });
+      useGameStore.getState().clearPendingMove();
     }
-  }, [store]);
+  }, []);
 
-  // Initialize on mount
+  const initializedRef = useRef(false);
+
   useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
     initializeGame();
-
     return () => {
       if (socketRef.current) {
         leaveMatch(socketRef.current, store.matchId || '').catch(console.error);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Handle board updates
+  // Clear matchId from storage when game ends
   useEffect(() => {
-    void handleBoardUpdate();
-  }, [handleBoardUpdate, store.board]);
+    if (store.gameOver) {
+      localStorage.removeItem('activeMatchId');
+    }
+  }, [store.gameOver]);
 
-  // Render loading state
+  useEffect(() => {
+    const unsubscribe = useGameStore.subscribe((state, prevState) => {
+      if (state.pendingMove !== prevState.pendingMove && state.pendingMove !== null) {
+        handleBoardUpdate();
+      }
+    });
+    return unsubscribe;
+  }, [handleBoardUpdate]);
+
   if (isInitializing && !store.matchId) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -251,31 +311,25 @@ function App() {
           <h1 className="text-3xl font-bold">Tic-Tac-Toe</h1>
           <p className="text-indigo-100 mt-1">Nakama Multiplayer</p>
         </div>
-
         <div className="p-6 space-y-4">
-          {/* Error message */}
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-sm text-red-700">{error}</p>
             </div>
           )}
-
-          {/* Conditional rendering based on game state */}
-          {!store.matchId ? (
-            <MatchLobby />
+          {store.matchId && Object.keys(store.players).length === 2 && !store.gameOver ? (
+            <>
+              <GameStatus />
+              <GameBoard />
+            </>
           ) : store.gameOver ? (
             <>
               <GameResult />
               <GameStatus />
             </>
           ) : (
-            <>
-              <GameStatus />
-              <GameBoard />
-            </>
+            <MatchLobby />
           )}
-
-          {/* Connection indicator */}
           {store.matchId && (
             <div className="text-center text-xs text-gray-500">
               {store.isConnected ? '✓ Connected' : '✗ Disconnected'}

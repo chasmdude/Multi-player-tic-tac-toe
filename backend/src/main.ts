@@ -30,13 +30,14 @@ function checkWinner(board) {
 
 const matchInit = function(ctx, logger, nk, params) {
   logger.info('TicTacToe: matchInit');
-  return {
+return {
     state: {
       board: ['', '', '', '', '', '', '', '', ''],
       players: {},
       currentTurn: '',
       winner: null,
       gameOver: false,
+      ticksSinceLastMove: 0,
     },
     tickRate: 5,
     label: JSON.stringify({ open: true }),
@@ -55,67 +56,119 @@ const matchJoinAttempt = function(ctx, logger, nk, dispatcher, tick, state, pres
 };
 
 const matchJoin = function(ctx, logger, nk, dispatcher, tick, state, presences) {
-  if (Object.keys(state.players).length === 2 && state.currentTurn === '') {
+  logger.info('TicTacToe: matchJoin - players: ' + JSON.stringify(state.players) + ', currentTurn: ' + state.currentTurn + ', playerCount: ' + Object.keys(state.players).length);
+  
+  // Broadcast state to newly joined player(s)
+  dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
+  
+  // Set currentTurn to X player as soon as first player joins (for testing) or after 2nd player joins (for real games)
+  if (state.currentTurn === '') {
     const xPlayerId = Object.keys(state.players).find(function(id) { return state.players[id] === 'X'; });
     if (xPlayerId) {
       state.currentTurn = xPlayerId;
+      logger.info('TicTacToe: Setting currentTurn to X player: ' + xPlayerId);
     }
-    dispatcher.matchLabelUpdate(JSON.stringify({ open: false }));
-    dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
-    logger.info('TicTacToe: Game started');
   }
+  
+  // When 2nd player joins, close the match for new players
+  if (Object.keys(state.players).length === 2) {
+    dispatcher.matchLabelUpdate(JSON.stringify({ open: false }));
+    logger.info('TicTacToe: Match now full (2 players), closing for new joins');
+  }
+  
+  dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
+  logger.info('TicTacToe: Broadcast updated state');
+  
   return { state: state };
 };
 
 const matchLeave = function(ctx, logger, nk, dispatcher, tick, state, presences) {
+  for (let i = 0; i < presences.length; i++) {
+    const presence = presences[i];
+    logger.info('TicTacToe: ' + presence.username + ' left');
+    // We keep them in state.players for reconnection support, 
+    // but in a real app you might want to remove them if the game hasn't started.
+  }
   return { state: state };
 };
 
 const matchLoop = function(ctx, logger, nk, dispatcher, tick, state, messages) {
+  // Only process if match is full (2 players)
+  const playerCount = Object.keys(state.players).length;
+  
   if (!state.gameOver && messages && messages.length > 0) {
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       if (msg.opCode === 3) {  // MAKE_MOVE
+        if (playerCount < 2) {
+          logger.info('TicTacToe: Move rejected - waiting for second player');
+          continue;
+        }
+        
         if (msg.sender.userId === state.currentTurn) {
           let move;
           try {
-            move = JSON.parse(msg.data);
+            // Need to convert to string if it's not a string already, though JSON.parse might try
+            let dataStr = typeof msg.data === 'string' ? msg.data : nk.binaryToString(msg.data);
+            move = JSON.parse(dataStr);
+            logger.info('TicTacToe: Valid move parsed: ' + JSON.stringify(move));
           } catch (e) {
+            logger.error('TicTacToe: Failed to parse move data. Error: ' + e + ', Data type: ' + typeof msg.data + ', Data: ' + msg.data);
             continue;
           }
           const pos = move.position;
           if (pos >= 0 && pos <= 8 && state.board[pos] === '') {
             const mark = state.players[msg.sender.userId];
             state.board[pos] = mark;
+            state.ticksSinceLastMove = 0;  // Reset timer after move
             
             const result = checkWinner(state.board);
             if (result) {
               if (result === 'DRAW') {
                 state.winner = 'DRAW';
               } else {
-                for (const userId in state.players) {
-                  if (state.players[userId] === result) {
-                    state.winner = userId;
-                    break;
-                  }
-                }
+                state.winner = msg.sender.userId;
               }
               state.gameOver = true;
+              // Broadcast final state AND game over
               dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
-              return null;
+              dispatcher.broadcastMessage(2, JSON.stringify({ winner: state.winner, board: state.board }), null, null, true);
+              return { state: state };
             }
             
-            const opponent = Object.keys(state.players).find(function(id) { return id !== msg.sender.userId; });
-            if (opponent) {
-              state.currentTurn = opponent;
+            const opponentId = Object.keys(state.players).find(function(id) { return id !== msg.sender.userId; });
+            if (opponentId) {
+              state.currentTurn = opponentId;
             }
-            dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
           }
         }
       }
     }
   }
-  return null;
+  
+  // Skip timer/timeout if not full
+  if (playerCount < 2) {
+    state.ticksSinceLastMove = 0;
+    dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
+    return { state: state };
+  }
+
+  // Check for timeout (15 seconds = 75 ticks at 5 ticks/sec)
+  if (!state.gameOver) {
+    state.ticksSinceLastMove = (state.ticksSinceLastMove || 0) + 1;
+    if (state.ticksSinceLastMove >= 75) {
+      const opponent = Object.keys(state.players).find(function(id) { return id !== state.currentTurn; });
+      if (opponent) {
+        state.currentTurn = opponent;
+        state.ticksSinceLastMove = 0;
+      }
+    }
+  }
+  
+  // Broadcast state to keep everyone synced
+  dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
+  
+  return { state: state };
 };
 
 const matchSignal = function(ctx, logger, nk, dispatcher, tick, state, data) {
@@ -128,11 +181,38 @@ const matchTerminate = function(ctx, logger, nk, dispatcher, tick, state, graceS
 
 const rpcFindOrCreateMatch = function(ctx, logger, nk, payload) {
   try {
-    const matches = nk.matchList(1, true, null, { open: true }, null);
+    logger.info('TicTacToe: RPC find_or_create_match called');
+    
+    // Find existing open match (size < 2 means less than 2 players)
+    // matchList params: limit, authoritative, label, minSize, maxSize, query
+    const matches = nk.matchList(10, true, null, 0, 2, null);
+    logger.info('TicTacToe: Found ' + (matches ? matches.length : 0) + ' matches');
+    
     if (matches && matches.length > 0) {
-      return JSON.stringify({ match_id: matches[0].match_id });
+      for (let i = 0; i < matches.length; i++) {
+        const match = matches[i];
+        // Check the label to see if match is open
+        let label: Record<string, any> = {};
+        try {
+          label = match.label ? JSON.parse(match.label) : {};
+        } catch (e) {
+          logger.error('TicTacToe: Failed to parse label for match ' + match.matchId + ': ' + e);
+        }
+        logger.info('TicTacToe: ✓ Checking match ' + match.matchId + ', player_count: ' + match.size + ', label: ' + JSON.stringify(label) + ', open: ' + label.open);
+        
+        // Only return match if it's marked as open in the label
+        if (label.open === true) {
+          logger.info('TicTacToe: ✓✓ RETURNING OPEN MATCH ' + match.matchId);
+          return JSON.stringify({ match_id: match.matchId });
+        } else {
+          logger.info('TicTacToe: ✗ Match ' + match.matchId + ' is NOT OPEN (open=' + label.open + '), skipping');
+        }
+      }
     }
+    
+    // No open match found, create new one
     const matchId = nk.matchCreate('tictactoe', {});
+    logger.info('TicTacToe: ✗✗ NO OPEN MATCH FOUND, CREATING NEW: ' + matchId);
     return JSON.stringify({ match_id: matchId });
   } catch (err) {
     logger.error('RPC error: ' + err);
