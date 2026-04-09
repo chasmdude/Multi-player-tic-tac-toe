@@ -30,7 +30,7 @@ function checkWinner(board) {
 
 const matchInit = function(ctx, logger, nk, params) {
   logger.info('TicTacToe: matchInit');
-return {
+  return {
     state: {
       board: ['', '', '', '', '', '', '', '', ''],
       players: {},
@@ -73,7 +73,8 @@ const matchJoin = function(ctx, logger, nk, dispatcher, tick, state, presences) 
   }
   
   // When 2nd player joins, close the match for new players
-  if (Object.keys(state.players).length === 2) {
+  const playerCount = Object.keys(state.players).length;
+  if (playerCount === 2) {
     dispatcher.matchLabelUpdate(JSON.stringify({ open: false }));
     logger.info('TicTacToe: Match now full (2 players), closing for new joins');
   }
@@ -228,9 +229,12 @@ const updateLeaderboard = function(nk, logger, state) {
       logger.error('TicTacToe: Failed to write stats: ' + e);
     }
     
-    // 4. Update leaderboard record (metadata must be object, not string)
+    // 4. Update leaderboard record with accumulated score and metadata
     try {
-      nk.leaderboardRecordWrite('tictactoe_leaderboard', userId, username, score, 0, stats);
+      // Calculate total score: wins * 200 + draws * 50
+      const totalScore = (stats.wins || 0) * 200 + (stats.draws || 0) * 50;
+      nk.leaderboardRecordWrite('tictactoe_leaderboard', userId, username, totalScore, 0, stats);
+      logger.info('TicTacToe: Leaderboard updated for ' + userId + ' with totalScore ' + totalScore + ' and stats: ' + JSON.stringify(stats));
     } catch (e) {
       logger.error('TicTacToe: Failed to write leaderboard: ' + e);
     }
@@ -304,7 +308,7 @@ function InitModule(ctx, logger, nk, initializer) {
   const id = 'tictactoe_leaderboard';
   const authoritative = false;
   const sort = 'desc';
-  const operator = 'incr'; // Points accumulate
+  const operator = 'best'; // Use 'best' to allow metadata updates
   const reset = null;
   const metadata = { title: 'Tic Tac Toe Global Rankings' };
   nk.leaderboardCreate(id, authoritative, sort, operator, reset, metadata);

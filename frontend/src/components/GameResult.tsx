@@ -23,15 +23,19 @@ export default function GameResult() {
 
     async function fetchStatsOnce(ownerIds: string[]) {
       const result = await listLeaderboardRecordsByOwners(session!, ownerIds);
+      console.log('Leaderboard result:', result);
+      console.log('Records:', result.records);
 
       const formattedStats = ownerIds.map((id) => {
         const record = result.records?.find((r: any) => r.owner_id === id);
+        console.log('Record for user', id, ':', record);
         let metadata: any = {};
         try {
           metadata =
             typeof record?.metadata === 'string'
               ? JSON.parse(record.metadata)
               : record?.metadata || {};
+          console.log('Parsed metadata for', id, ':', metadata);
         } catch (e) {
           console.error('Failed to parse metadata:', e);
         }
@@ -118,17 +122,23 @@ export default function GameResult() {
   
   let isWinner = false;
   let isDraw = false;
-  let winnerMarkForDisplay: 'X' | 'O' | null = null;
   
   if (winner === 'DRAW') {
     isDraw = true;
-    winnerMarkForDisplay = null;
   } else if (winner === 'WIN') {
     isWinner = true;
-    winnerMarkForDisplay = myMark;
   } else if (winner === 'LOSS') {
     isWinner = false;
-    winnerMarkForDisplay = opponentMark;
+  }
+
+  console.log('GameResult debug:', { myMark, opponentMark, isWinner, winner, myUserId, players: state.players });
+  
+  if (winner === 'DRAW') {
+    isDraw = true;
+  } else if (winner === 'WIN') {
+    isWinner = true;
+  } else if (winner === 'LOSS') {
+    isWinner = false;
   }
 
   return (
@@ -186,25 +196,13 @@ export default function GameResult() {
               <X size={80} color="#94a3b8" style={{ opacity: 0.6, strokeWidth: 2 }} />
               <Circle size={64} color="#94a3b8" style={{ opacity: 0.6, strokeWidth: 3 }} />
             </div>
-          ) : isWinner ? (
-            <div style={{ padding: '16px', backgroundColor: 'rgba(6, 182,212,0.1)', borderRadius: '50%', border: '2px solid rgba(34,211,238,0.3)' }}>
-              {winnerMarkForDisplay === 'X' ? (
-                <X size={96} color="#22d3ee" style={{ filter: 'drop-shadow(0 0 15px rgba(34,211,238,0.8))', strokeWidth: 3 }} />
-              ) : (
-                <Circle size={80} color="#22d3ee" style={{ filter: 'drop-shadow(0 0 15px rgba(34,211,238,0.8))', strokeWidth: 4 }} />
-              )}
-            </div>
-          ) : winnerMarkForDisplay ? (
-            <div style={{ padding: '16px', backgroundColor: 'rgba(244,63,94,0.1)', borderRadius: '50%', border: '2px solid rgba(244,63,94,0.3)' }}>
-              {winnerMarkForDisplay === 'X' ? (
-                <X size={96} color="#f43f5e" style={{ filter: 'drop-shadow(0 0 15px rgba(244,63,94,0.8))', strokeWidth: 3 }} />
-              ) : (
-                <Circle size={80} color="#f43f5e" style={{ filter: 'drop-shadow(0 0 15px rgba(244,63,94,0.8))', strokeWidth: 4 }} />
-              )}
-            </div>
           ) : (
-            <div style={{ padding: '16px', backgroundColor: 'rgba(148,163,184,0.1)', borderRadius: '50%', border: '2px solid rgba(148,163,184,0.3)' }}>
-              <X size={64} color="#94a3b8" style={{ opacity: 0.6 }} />
+            <div style={{ padding: '16px', backgroundColor: isWinner ? 'rgba(6, 182,212,0.1)' : 'rgba(244,63,94,0.1)', borderRadius: '50%', border: isWinner ? '2px solid rgba(34,211,238,0.3)' : '2px solid rgba(244,63,94,0.3)' }}>
+              {(isWinner ? myMark : opponentMark) === 'X' ? (
+                <X size={96} color={isWinner ? '#22d3ee' : '#f43f5e'} style={{ strokeWidth: 3, filter: `drop-shadow(0 0 15px ${isWinner ? 'rgba(34,211,238,0.8)' : 'rgba(244,63,94,0.8)'})` }} />
+              ) : (
+                <Circle size={88} color={isWinner ? '#22d3ee' : '#f43f5e'} style={{ strokeWidth: 3, filter: `drop-shadow(0 0 15px ${isWinner ? 'rgba(34,211,238,0.8)' : 'rgba(244,63,94,0.8)'})` }} />
+              )}
             </div>
           )}
         </div>

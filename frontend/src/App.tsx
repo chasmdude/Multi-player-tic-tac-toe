@@ -13,7 +13,6 @@ import GameBoard from '@/components/GameBoard';
 import GameStatus from '@/components/GameStatus';
 import GameResult from '@/components/GameResult';
 import MatchLobby from '@/components/MatchLobby';
-import Leaderboard from '@/components/Leaderboard';
 import { Play } from 'lucide-react';
 import './App.css';
 
@@ -68,13 +67,24 @@ function App() {
             }
           }
           
+          let winStatus: 'WIN' | 'LOSS' | 'DRAW' | null = null;
+          if (serverState.gameOver && serverState.winner) {
+            if (serverState.winner === 'DRAW') {
+              winStatus = 'DRAW';
+            } else if (serverState.winner === currentState.currentUserId) {
+              winStatus = 'WIN';
+            } else {
+              winStatus = 'LOSS';
+            }
+          }
+          
           store.updateState({
             board: mergedBoard,
             currentTurn: serverState.currentTurn || '',
             players: serverState.players || {},
             ticksRemaining: ticksRemaining,
             gameOver: serverState.gameOver || false,
-            winner: serverState.winner || null,
+            winner: winStatus,
           });
 
           if (currentState.currentUserId && serverState.players) {
@@ -340,6 +350,19 @@ function App() {
                 <Play className="fill-current transition-transform group-hover:scale-125" size={24} />
                 QUICK PLAY
               </button>
+            </div>
+          ) : (
+            <div className="space-y-8 animate-fade-in">
+              <GameStatus />
+              
+              <div className="relative">
+                <GameBoard />
+                
+                {/* Lobby Overlay - only shown if match isn't full */}
+                {(isQueuing || !store.matchId || Object.keys(store.players).length < 2) && (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/60 backdrop-blur-md rounded-[24px] border border-slate-800/50 p-6">
+                    <MatchLobby />
+                  </div>
                 )}
                 
                 {store.gameOver && <GameResult />}
@@ -357,11 +380,11 @@ function App() {
                 </div>
                 
                 {store.matchId && (
-                   <button 
+                  <button 
                     onClick={() => {
-                        leaveMatch(socketRef.current!, store.matchId!);
-                        store.setMatchId(null);
-                        setIsQueuing(false);
+                      leaveMatch(socketRef.current!, store.matchId!);
+                      store.setMatchId(null);
+                      setIsQueuing(false);
                     }}
                     className="text-[9px] font-black text-rose-500/70 hover:text-rose-400 uppercase tracking-widest transition-colors"
                   >
