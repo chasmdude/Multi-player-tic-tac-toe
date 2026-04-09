@@ -19,6 +19,7 @@ export interface GameState {
   currentUserId: string | null;
   currentUserName: string | null;
   playerNames: { [userId: string]: string };
+  session: any | null;
   
   // Pending move to send to server (not applied to local board)
   pendingMove: number | null;
@@ -33,11 +34,13 @@ export interface GameState {
   setConnected: (connected: boolean) => void;
   setCurrentUserId: (id: string, name: string) => void;
   setPlayerNames: (names: { [userId: string]: string }) => void;
+  setSession: (session: any) => void;
 
   // Selectors
   isYourTurn: () => boolean;
   opponentMark: () => 'X' | 'O' | null;
   timeoutSeconds: () => number;
+  matchReady: () => boolean;
 }
 
 const initialState = {
@@ -54,6 +57,7 @@ const initialState = {
   currentUserId: null,
   currentUserName: null,
   playerNames: {},
+  session: null,
   pendingMove: null,
 };
 
@@ -121,9 +125,14 @@ export const useGameStore = create<GameState>((set, get) => ({
     }));
   },
 
+  setSession: (session: any) => {
+    set({ session });
+  },
+
   isYourTurn: () => {
     const state = get();
-    return state.currentTurn === state.currentUserId && !state.gameOver;
+    const ready = Object.keys(state.players || {}).length === 2;
+    return ready && state.currentTurn === state.currentUserId && !state.gameOver;
   },
 
   opponentMark: () => {
@@ -135,5 +144,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   timeoutSeconds: () => {
     const state = get();
     return Math.ceil(state.ticksRemaining / 5);
+  },
+
+  matchReady: () => {
+    const state = get();
+    return Object.keys(state.players || {}).length === 2;
   },
 }));

@@ -13,6 +13,8 @@ import GameBoard from '@/components/GameBoard';
 import GameStatus from '@/components/GameStatus';
 import GameResult from '@/components/GameResult';
 import MatchLobby from '@/components/MatchLobby';
+import Leaderboard from '@/components/Leaderboard';
+import { Play } from 'lucide-react';
 import './App.css';
 
 const OpCode = {
@@ -28,12 +30,14 @@ function App() {
   const maxReconnectAttempts = 5;
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [isQueuing, setIsQueuing] = useState(false);
   const isProcessingMoveRef = useRef(false);
+  const initializeGameRef = useRef<() => void>(() => {});
 
   /**
    * Setup WebSocket event listeners
    */
-  const setupSocketListeners = (socket: Socket) => {
+  const setupSocketListeners = useCallback((socket: Socket) => {
     socket.onmatchdata = (data) => {
       try {
         const dataStr = typeof data.data === 'string' ? data.data : new TextDecoder().decode(data.data);
@@ -43,21 +47,24 @@ function App() {
           const currentState = useGameStore.getState();
           const ticksRemaining = serverState.ticksSinceLastMove !== undefined ? Math.max(0, 75 - serverState.ticksSinceLastMove) : 75;
           
-          const mergedBoard: string[] = [];
-          for (let i = 0; i < 9; i++) {
-            if (serverState.board?.[i] && serverState.board[i] !== '') {
-              mergedBoard[i] = serverState.board[i];
-            } else if (currentState.board?.[i] && currentState.board[i] !== '') {
-              // We have a local optimistic mark but server says empty.
-              // If server still thinks it's our turn, keep optimistic mark (pending server response).
-              // If server thinks it's the opponent's turn, our rejected moves should be cleared.
-              if (serverState.currentTurn === currentState.currentUserId) {
-                mergedBoard[i] = currentState.board[i];
+          let mergedBoard: string[];
+          
+          if (serverState.gameOver) {
+            mergedBoard = serverState.board || [];
+          } else {
+            mergedBoard = [];
+            for (let i = 0; i < 9; i++) {
+              if (serverState.board?.[i] && serverState.board[i] !== '') {
+                mergedBoard[i] = serverState.board[i];
+              } else if (currentState.board?.[i] && currentState.board[i] !== '') {
+                if (serverState.currentTurn === currentState.currentUserId) {
+                  mergedBoard[i] = currentState.board[i];
+                } else {
+                  mergedBoard[i] = '';
+                }
               } else {
                 mergedBoard[i] = '';
               }
-            } else {
-              mergedBoard[i] = '';
             }
           }
           
@@ -76,13 +83,13 @@ function App() {
               store.updateState({ playerMark: myMark as 'X' | 'O' });
             }
             
-              const opponentId = Object.keys(serverState.players || {}).find(id => id !== currentState.currentUserId);
-              if (opponentId) {
-                const oppName = currentState.playerNames[opponentId] || `Player ${opponentId.substring(0, 4)}...`;
-                store.updateState({ opponentName: oppName });
-              }
+            const opponentId = Object.keys(serverState.players || {}).find(id => id !== currentState.currentUserId);
+            if (opponentId) {
+              const oppName = currentState.playerNames[opponentId] || `Player ${opponentId.substring(0, 4)}`;
+              store.updateState({ opponentName: oppName });
             }
-          } else if (data.op_code === OpCode.GAME_OVER) {
+          }
+        } else if (data.op_code === OpCode.GAME_OVER) {
           const currentState = useGameStore.getState();
           const winner = serverState.winner;
           let winStatus: 'WIN' | 'LOSS' | 'DRAW' = 'DRAW';
@@ -107,25 +114,24 @@ function App() {
     };
 
     socket.onmatchpresence = (presence) => {
-      console.log('Match presence:', presence);
+      console.log('Presence update:', presence);
       const joins = presence.joins || [];
       const leaves = presence.leaves || [];
       
       if (joins.length > 0) {
         const newNames: Record<string, string> = {};
         joins.forEach(p => {
-            if (p.user_id && p.username) {
-                newNames[p.user_id] = p.username;
-            }
+          if (p.user_id && p.username) {
+            newNames[p.user_id] = p.username;
+          }
         });
         useGameStore.getState().setPlayerNames(newNames);
-        
         store.setConnected(true);
         setError(null);
       }
       
       if (leaves.length > 0) {
-        setError('Opponent disconnected. Waiting for reconnection...');
+        setError('Opponent disconnected.');
         store.setConnected(false);
       }
     };
@@ -136,87 +142,90 @@ function App() {
       if (reconnectAttemptsRef.current < maxReconnectAttempts) {
         reconnectAttemptsRef.current++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 8000);
-        setTimeout(initializeGame, delay);
+        setTimeout(() => initializeGameRef.current(), delay);
       }
     };
 
     socket.onerror = (evt) => {
       console.error('Socket error:', evt);
       store.setConnected(false);
-      setError('Connection error. Reconnecting...');
+      setError('Connection error.');
     };
-  };
+  }, [store]);
 
   /**
-   * Initialize Nakama connection and find/join match
+   * Initialize Nakama connection
    */
-  const initializeGame = async () => {
+  const initializeGame = useCallback(async () => {
     try {
       setIsInitializing(true);
       setError(null);
 
-      // Try to restore user ID from localStorage, or create new anonymous user
       let userId = localStorage.getItem('userId') || undefined;
       const session = await authenticateAnonymously(userId);
       userId = session.user_id!;
       localStorage.setItem('userId', userId);
       store.setCurrentUserId(userId, session.username || 'You');
+      store.setSession(session);
 
       const socket = await createSocket(session);
       socketRef.current = socket;
       setupSocketListeners(socket);
       store.setConnected(true);
 
-      // Find or create match with retry logic
-      let matchId = localStorage.getItem('activeMatchId');
-      let match;
-      let joinAttempts = 0;
-      const maxAttempts = 3;
-      
-      while (joinAttempts < maxAttempts) {
-        if (!matchId) {
-          matchId = await findOrCreateMatch(session);
-        }
-        
+      // Reconnect to active match if exists
+      const activeMatchId = localStorage.getItem('activeMatchId');
+      if (activeMatchId) {
+        setIsQueuing(true);
         try {
-          match = await joinMatch(socket, matchId);
-          // Success!
-          localStorage.setItem('activeMatchId', matchId);
-          break;
-        } catch (joinErr) {
-          // Join failed - clear and get new match
-          console.log('Join failed (attempt ' + (joinAttempts + 1) + '), retrying...');
+          const match = await joinMatch(socket, activeMatchId);
+          store.setMatchId(match.match_id);
+          store.updateState({ players: {} });
+        } catch {
           localStorage.removeItem('activeMatchId');
-          matchId = null;
-          joinAttempts++;
+          setIsQueuing(false);
         }
       }
-      
-      if (!match) {
-        throw new Error('Could not join a match after ' + maxAttempts + ' attempts');
-      }
-      
-      const actualMatchId = match.match_id;
-      store.setMatchId(actualMatchId);
-      
-      // match.presences includes other players, plus self is in the session
-      // However, we wait for UPDATE_STATE for official player mapping
-      // We set an empty object just to indicate the match is active
-      store.updateState({ players: {} });
 
       reconnectAttemptsRef.current = 0;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       setError(errorMsg);
-      // Clear invalid matchId from storage
-      localStorage.removeItem('activeMatchId');
       if (reconnectAttemptsRef.current < maxReconnectAttempts) {
         reconnectAttemptsRef.current++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 8000);
-        setTimeout(initializeGame, delay);
+        setTimeout(() => initializeGameRef.current(), delay);
       }
     } finally {
       setIsInitializing(false);
+    }
+  }, [setupSocketListeners, store]);
+
+  useEffect(() => {
+    initializeGameRef.current = () => {
+      void initializeGame();
+    };
+  }, [initializeGame]);
+
+  /**
+   * Start finding a match
+   */
+  const handleStartMatchmaking = async () => {
+    if (!store.session || !socketRef.current) return;
+    
+    try {
+      setIsQueuing(true);
+      setError(null);
+
+      const matchId = await findOrCreateMatch(store.session);
+      const match = await joinMatch(socketRef.current, matchId);
+      
+      localStorage.setItem('activeMatchId', match.match_id);
+      store.setMatchId(match.match_id);
+      store.updateState({ players: {} });
+    } catch {
+      setError('Matchmaking failed. Try again.');
+      setIsQueuing(false);
     }
   };
 
@@ -225,6 +234,7 @@ function App() {
     const pendingMove = state.pendingMove;
     const matchId = state.matchId;
     const playerMark = state.playerMark;
+    const matchReady = Object.keys(state.players || {}).length === 2;
 
     console.log('handleBoardUpdate called:', {
       pendingMove,
@@ -235,7 +245,7 @@ function App() {
       playerMark
     });
 
-    if (pendingMove !== null && state.isYourTurn() && socketRef.current && matchId && !isProcessingMoveRef.current) {
+    if (pendingMove !== null && matchReady && state.isYourTurn() && socketRef.current && matchId && !isProcessingMoveRef.current) {
       try {
         isProcessingMoveRef.current = true;
         
@@ -259,7 +269,7 @@ function App() {
       console.log('Move rejected:', { pendingMove, isYourTurn: state.isYourTurn(), hasSocket: !!socketRef.current, matchId });
       useGameStore.getState().clearPendingMove();
     }
-  }, []);
+  }, [store]);
 
   const initializedRef = useRef(false);
 
@@ -272,7 +282,7 @@ function App() {
         leaveMatch(socketRef.current, store.matchId || '').catch(console.error);
       }
     };
-  }, []);
+  }, [initializeGame, store.matchId]);
 
   // Clear matchId from storage when game ends
   useEffect(() => {
@@ -305,34 +315,82 @@ function App() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-md w-full mx-auto bg-white rounded-lg shadow-2xl overflow-hidden">
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 text-center">
-          <h1 className="text-3xl font-bold">Tic-Tac-Toe</h1>
-          <p className="text-indigo-100 mt-1">Nakama Multiplayer</p>
+    <div className="flex items-center justify-center min-h-screen p-4 font-sans">
+      <div className="max-w-md w-full animate-fade-in">
+        <div className="text-center mb-10">
+          <h1 className="text-5xl font-black tracking-tighter text-white drop-shadow-[0_0_15px_rgba(34,211,238,0.3)]">
+            LILA <span className="text-cyan-400">BLACK</span>
+          </h1>
+          <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mt-2">multiplayer tic-tac-toe</p>
         </div>
-        <div className="p-6 space-y-4">
+        
+        <div className="space-y-8">
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-sm text-red-700">{error}</p>
+            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl animate-shake">
+              <p className="text-xs text-rose-400 text-center font-black uppercase tracking-widest">{error}</p>
             </div>
           )}
-          {store.matchId && Object.keys(store.players).length === 2 && !store.gameOver ? (
-            <>
-              <GameStatus />
-              <GameBoard />
-            </>
-          ) : store.gameOver ? (
-            <>
-              <GameResult />
-              <GameStatus />
-            </>
+          
+          {!isQueuing && !store.matchId ? (
+            <div className="flex flex-col gap-10 animate-fade-in">
+              <button 
+                onClick={handleStartMatchmaking}
+                className="btn-primary w-full py-6 text-lg font-black tracking-[0.3em] flex items-center justify-center gap-4 group"
+              >
+                <Play className="fill-current transition-transform group-hover:scale-125" size={24} />
+                QUICK PLAY
+              </button>
+              
+              <div className="space-y-4">
+                <div className="flex items-center gap-4">
+                  <div className="h-px flex-1 bg-slate-800"></div>
+                  <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Global Rankings</span>
+                  <div className="h-px flex-1 bg-slate-800"></div>
+                </div>
+                <Leaderboard />
+              </div>
+            </div>
           ) : (
-            <MatchLobby />
-          )}
-          {store.matchId && (
-            <div className="text-center text-xs text-gray-500">
-              {store.isConnected ? '✓ Connected' : '✗ Disconnected'}
+            <div className="space-y-8 animate-fade-in">
+              <GameStatus />
+              
+              <div className="relative">
+                <GameBoard />
+                
+                {/* Lobby Overlay - only shown if match isn't full */}
+                {(isQueuing || !store.matchId || Object.keys(store.players).length < 2) && (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/60 backdrop-blur-md rounded-[24px] border border-slate-800/50 p-6">
+                    <MatchLobby />
+                  </div>
+                )}
+                
+                {store.gameOver && <GameResult />}
+              </div>
+
+              <div className="flex items-center justify-between px-2">
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <div className={`w-1.5 h-1.5 rounded-full ${store.isConnected ? 'bg-cyan-400' : 'bg-rose-500'}`} />
+                    {store.isConnected && <div className="absolute inset-0 w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping opacity-50" />}
+                  </div>
+                  <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">
+                    {store.isConnected ? 'Auth Link Stable' : 'Link Connection Offline'}
+                  </span>
+                </div>
+                
+                {store.matchId && (
+                   <button 
+                    onClick={() => {
+                        leaveMatch(socketRef.current!, store.matchId!);
+                        store.setMatchId(null);
+                        setIsQueuing(false);
+                    }}
+                    className="text-[9px] font-black text-rose-500/70 hover:text-rose-400 uppercase tracking-widest transition-colors"
+                  >
+                    Abort Match
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -340,5 +398,7 @@ function App() {
     </div>
   );
 }
+
+
 
 export default App;

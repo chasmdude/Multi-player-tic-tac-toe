@@ -15,6 +15,8 @@ export interface NakamaConfig {
   useSSL: boolean;
 }
 
+import { generateRandomName } from './names';
+
 /**
  * Authenticate user anonymously with Nakama
  */
@@ -23,7 +25,22 @@ export async function authenticateAnonymously(userId?: string): Promise<Session>
     // Use provided userId or generate a unique device ID
     const deviceId = userId || `device_${Date.now()}_${Math.random().toString(36).substring(2, 15)}_${crypto.randomUUID()}`;
     const session = await client.authenticateDevice(deviceId, true);
-    console.log('Nakama authentication successful:', session.user_id);
+    
+    // If username is not set or is just a UUID, set a friendly one
+    // Note: Nakama session usually has username, but we can verify via getAccount
+    const account = await client.getAccount(session);
+    if (!account.user?.username || account.user.username.length > 20 || /^[a-f0-9-]{36}$/.test(account.user.username)) {
+      const newName = generateRandomName();
+      await client.updateAccount(session, {
+        username: newName
+      });
+      // Refresh session or just update the session object's username property if possible
+      // In JS client, we might need to re-authenticate or just know we updated it
+      (session as any).username = newName;
+      console.log('Username updated to:', newName);
+    }
+
+    console.log('Nakama authentication successful:', session.user_id, 'Username:', session.username);
     return session;
   } catch (error) {
     console.error('Nakama authentication failed:', error);
@@ -107,6 +124,36 @@ export async function sendMove(socket: Socket, matchId: string, position: number
   } catch (error) {
     console.error('sendMove failed:', error);
     throw new Error('Failed to send move to server');
+  }
+}
+
+/**
+ * List leaderboard records for specific users
+ */
+export async function listLeaderboardRecordsByOwners(
+  session: Session, 
+  ownerIds: string[], 
+  leaderboardId: string = 'tictactoe_leaderboard'
+) {
+  try {
+    const result = await client.listLeaderboardRecords(session, leaderboardId, ownerIds);
+    return result;
+  } catch (error) {
+    console.error('Failed to list leaderboard records by owners:', error);
+    throw new Error('Failed to fetch player stats');
+  }
+}
+
+/**
+ * List leaderboard records
+ */
+export async function listLeaderboardRecords(session: Session, leaderboardId: string = 'tictactoe_leaderboard') {
+  try {
+    const result = await client.listLeaderboardRecords(session, leaderboardId, undefined, 10);
+    return result;
+  } catch (error) {
+    console.error('Failed to list leaderboard records:', error);
+    throw new Error('Failed to fetch leaderboard');
   }
 }
 

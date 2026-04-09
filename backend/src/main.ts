@@ -34,6 +34,7 @@ return {
     state: {
       board: ['', '', '', '', '', '', '', '', ''],
       players: {},
+      playerNames: {},
       currentTurn: '',
       winner: null,
       gameOver: false,
@@ -51,6 +52,7 @@ const matchJoinAttempt = function(ctx, logger, nk, dispatcher, tick, state, pres
   }
   const mark = playerCount === 0 ? 'X' : 'O';
   state.players[presence.userId] = mark;
+  state.playerNames[presence.userId] = presence.username || '';
   logger.info('TicTacToe: ' + presence.username + ' joined as ' + mark);
   return { state: state, accept: true };
 };
@@ -130,6 +132,14 @@ const matchLoop = function(ctx, logger, nk, dispatcher, tick, state, messages) {
                 state.winner = msg.sender.userId;
               }
               state.gameOver = true;
+              
+              // Update leaderboard stats
+              try {
+                updateLeaderboard(nk, logger, state);
+              } catch (e) {
+                logger.error('TicTacToe: Leaderboard update failed: ' + e);
+              }
+
               // Broadcast final state AND game over
               dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
               dispatcher.broadcastMessage(2, JSON.stringify({ winner: state.winner, board: state.board }), null, null, true);
@@ -153,15 +163,18 @@ const matchLoop = function(ctx, logger, nk, dispatcher, tick, state, messages) {
     return { state: state };
   }
 
+  // Skip timer/timeout and frequent broadcasts if game is already over
+  if (state.gameOver) {
+    return { state: state };
+  }
+
   // Check for timeout (15 seconds = 75 ticks at 5 ticks/sec)
-  if (!state.gameOver) {
-    state.ticksSinceLastMove = (state.ticksSinceLastMove || 0) + 1;
-    if (state.ticksSinceLastMove >= 75) {
-      const opponent = Object.keys(state.players).find(function(id) { return id !== state.currentTurn; });
-      if (opponent) {
-        state.currentTurn = opponent;
-        state.ticksSinceLastMove = 0;
-      }
+  state.ticksSinceLastMove = (state.ticksSinceLastMove || 0) + 1;
+  if (state.ticksSinceLastMove >= 75) {
+    const opponent = Object.keys(state.players).find(function(id) { return id !== state.currentTurn; });
+    if (opponent) {
+      state.currentTurn = opponent;
+      state.ticksSinceLastMove = 0;
     }
   }
   
@@ -169,6 +182,59 @@ const matchLoop = function(ctx, logger, nk, dispatcher, tick, state, messages) {
   dispatcher.broadcastMessage(1, JSON.stringify(state), null, null, true);
   
   return { state: state };
+};
+
+const updateLeaderboard = function(nk, logger, state) {
+  const players = Object.keys(state.players);
+  for (let i = 0; i < players.length; i++) {
+    const userId = players[i];
+    let score = 0;
+    const username = (state.playerNames && state.playerNames[userId]) ? state.playerNames[userId] : '';
+    
+    // 1. Fetch existing stats from storage
+    let stats = { wins: 0, losses: 0, draws: 0 };
+    try {
+      const records = nk.storageRead([{ collection: 'stats', key: 'game_stats', userId: userId }]);
+      if (records && records.length > 0) {
+        stats = records[0].value;
+      }
+    } catch (e) {
+      logger.error('TicTacToe: Failed to read stats: ' + e);
+    }
+    
+    // 2. Update local counts
+    if (state.winner === 'DRAW') {
+      stats.draws = (stats.draws || 0) + 1;
+      score = 50;
+    } else if (state.winner === userId) {
+      stats.wins = (stats.wins || 0) + 1;
+      score = 200;
+    } else {
+      stats.losses = (stats.losses || 0) + 1;
+      score = 0;
+    }
+    
+    // 3. Write back to storage (value must be object, not string)
+    try {
+      nk.storageWrite([{ 
+        collection: 'stats', 
+        key: 'game_stats', 
+        userId: userId, 
+        value: stats,
+        permissionRead: 2,
+        permissionWrite: 1
+      }]);
+    } catch (e) {
+      logger.error('TicTacToe: Failed to write stats: ' + e);
+    }
+    
+    // 4. Update leaderboard record (metadata must be object, not string)
+    try {
+      nk.leaderboardRecordWrite('tictactoe_leaderboard', userId, username, score, 0, stats);
+    } catch (e) {
+      logger.error('TicTacToe: Failed to write leaderboard: ' + e);
+    }
+  }
 };
 
 const matchSignal = function(ctx, logger, nk, dispatcher, tick, state, data) {
@@ -233,5 +299,16 @@ function InitModule(ctx, logger, nk, initializer) {
     matchTerminate: matchTerminate,
   });
   initializer.registerRpc('find_or_create_match', rpcFindOrCreateMatch);
+  
+  // Initialize Leaderboard
+  const id = 'tictactoe_leaderboard';
+  const authoritative = false;
+  const sort = 'desc';
+  const operator = 'incr'; // Points accumulate
+  const reset = null;
+  const metadata = { title: 'Tic Tac Toe Global Rankings' };
+  nk.leaderboardCreate(id, authoritative, sort, operator, reset, metadata);
+  logger.info('TicTacToe: Leaderboard created');
+
   logger.info('TicTacToe: Module initialized successfully');
 }
