@@ -340,28 +340,6 @@ function App() {
                 <Play className="fill-current transition-transform group-hover:scale-125" size={24} />
                 QUICK PLAY
               </button>
-              
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <div className="h-px flex-1 bg-slate-800"></div>
-                  <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Global Rankings</span>
-                  <div className="h-px flex-1 bg-slate-800"></div>
-                </div>
-                <Leaderboard />
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-8 animate-fade-in">
-              <GameStatus />
-              
-              <div className="relative">
-                <GameBoard />
-                
-                {/* Lobby Overlay - only shown if match isn't full */}
-                {(isQueuing || !store.matchId || Object.keys(store.players).length < 2) && (
-                  <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/60 backdrop-blur-md rounded-[24px] border border-slate-800/50 p-6">
-                    <MatchLobby />
-                  </div>
                 )}
                 
                 {store.gameOver && <GameResult />}
