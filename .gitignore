@@ -4,7 +4,7 @@ node_modules/
 .pnp.js
 
 # Build outputs
-backend/build/
+# backend/build/ - keep for deployment
 frontend/dist/
 frontend/.vite/
 
