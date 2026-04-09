@@ -33,3 +33,6 @@ Thumbs.db
 
 # TypeScript build info
 *.tsbuildinfo
+
+# Archive (local files, not for git)
+archive/
